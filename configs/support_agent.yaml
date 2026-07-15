@@ -1,0 +1,31 @@
+# Per-agent config — the reusability contract: onboarding a new agent is
+# this file + a trace adapter (+ optional custom evaluators). See metrics.md
+# for the score registry. Rubric/threshold changes go through PR review.
+agent: support-agent
+trace_adapter: langfuse-generic
+
+# Phase 0 demo: deterministic fake agent + local JSONL golden set.
+# Swap task_fn for your real agent and local_dataset for langfuse_dataset.
+task_fn: agent_evals.examples.demo_agent:invoke
+local_dataset: ../datasets/golden_support.jsonl
+# langfuse_dataset: support-agent-golden-v1
+
+repeats: 3            # k for pass^k
+
+judge:
+  provider: mock      # mock | anthropic (vertex/openai land in Phase 2)
+  model: mock-judge
+  # provider: anthropic
+  # model: claude-opus-4-8
+  daily_budget_usd: 25   # enforced in Phase 3 (judge activity)
+
+evaluators:
+  - goal_success            # LLM judge, session level
+  - name: label_match       # deterministic — triage fields
+    fields: [category, priority]
+  - tool_selection          # trajectory — expected vs actual tool set
+
+score_thresholds:           # the CI gate
+  goal_success: 0.85
+  label_match: 0.90
+  tool_selection: 0.90
