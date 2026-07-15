@@ -24,8 +24,29 @@ evaluators:
   - name: label_match       # deterministic — triage fields
     fields: [category, priority]
   - tool_selection          # trajectory — expected vs actual tool set
+  - tool_called             # required tools called AND succeeded
+  - tool_success_rate       # fraction of tool calls without errors
+  - redundant_calls         # identical repeated (tool, args) invocations
+  - name: latency_threshold
+    threshold_ms: 20000     # p100 per execution; binary, fail-closed
+  - name: cost_threshold
+    max_usd: 0.15
+  - name: json_schema_valid # triage output contract
+    schema:
+      type: object
+      required: [category, priority, reply]
+      properties:
+        category: {type: string, enum: [billing, account, technical, general]}
+        priority: {type: string, enum: [high, normal]}
+        reply: {type: string}
 
 score_thresholds:           # the CI gate
   goal_success: 0.85
   label_match: 0.90
   tool_selection: 0.90
+  tool_called: 1.0
+  tool_success_rate: 1.0
+  redundant_calls: 1.0
+  latency_threshold: 1.0
+  cost_threshold: 1.0
+  json_schema_valid: 1.0

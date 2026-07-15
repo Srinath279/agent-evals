@@ -24,6 +24,15 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("list-evaluators", help="list registered evaluators")
 
+    seed_parser = sub.add_parser(
+        "seed-dataset", help="upload a local JSONL golden set to a Langfuse dataset (PII-redacted)"
+    )
+    seed_parser.add_argument("--config", required=True)
+    seed_parser.add_argument("--from", dest="source", default=None,
+                             help="JSONL of cases (default: the config's local_dataset)")
+    seed_parser.add_argument("--name", default=None,
+                             help="dataset name (default: the config's langfuse_dataset)")
+
     args = parser.parse_args(argv)
 
     if args.command == "list-evaluators":
@@ -38,6 +47,32 @@ def main(argv: list[str] | None = None) -> int:
     from agent_evals.runner import run_offline
 
     cfg = load_config(args.config)
+
+    if args.command == "seed-dataset":
+        import json
+
+        from agent_evals.core.langfuse_client import LangfuseClient
+        from agent_evals.core.redaction import redact
+        from agent_evals.core.schemas import Case
+
+        name = args.name or cfg.langfuse_dataset
+        if not name:
+            print("error: no dataset name (--name or config langfuse_dataset)")
+            return 2
+        source = args.source or cfg.local_dataset
+        if not source:
+            print("error: no source JSONL (--from or config local_dataset)")
+            return 2
+        with open(cfg.resolve_path(source) if args.source is None else source) as f:
+            cases = [Case(**json.loads(line)) for line in f if line.strip()]
+        for case in cases:  # redaction before anything leaves the machine (note 05 §2)
+            case.input = redact(case.input)
+            case.expected_output = redact(case.expected_output)
+        client = LangfuseClient()
+        n = client.seed_dataset(name, cases)
+        client.flush()
+        print(f"seeded {n} redacted cases into Langfuse dataset '{name}'")
+        return 0
     result = run_offline(cfg, k=args.k, out_dir=args.out, post_to_langfuse=args.post_scores)
 
     print(f"run:       {result.run_id}")

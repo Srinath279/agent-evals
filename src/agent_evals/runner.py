@@ -83,6 +83,9 @@ def score_trace(
             score.trace_id = trace.trace_id
             score.case_id = case.case_id if case else None
             score.repeat_index = repeat_index
+            if trace.metadata.get("source_trace_id"):
+                # so Langfuse write-back attaches to the agent's real trace
+                score.metadata.setdefault("source_trace_id", trace.metadata["source_trace_id"])
             if cache:
                 cache.put(key, score)
         scores.append(score)
@@ -137,8 +140,13 @@ def run_single_case(
 ) -> CaseRunResult:
     result = task_fn(case.input)
     trace = result if isinstance(result, Trace) else Trace(**result)
-    if not trace.trace_id:
-        trace.trace_id = f"{run_id}/{case.case_id}/r{repeat_index}"
+    # Deterministic ID per (run, case, repeat): score-cache hits must survive
+    # retries even when the agent mints a random trace ID (note 09 §1). The
+    # agent's own Langfuse trace ID is preserved for score write-back.
+    source_trace_id = trace.trace_id
+    trace.trace_id = f"{run_id}/{case.case_id}/r{repeat_index}"
+    if source_trace_id:
+        trace.metadata["source_trace_id"] = source_trace_id
     trace.agent = trace.agent or cfg.agent
 
     scores = score_trace(trace, case, evaluators, cache=cache, repeat_index=repeat_index)

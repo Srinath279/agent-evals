@@ -39,7 +39,8 @@ class LangfuseClient:
 
     def post_score(self, score: Score) -> None:
         payload = dict(
-            trace_id=score.trace_id,
+            # the agent's real Langfuse trace, not the runner's deterministic ID
+            trace_id=score.metadata.get("source_trace_id") or score.trace_id,
             name=score.name,
             value=score.value,
             comment=score.comment or None,
@@ -48,6 +49,27 @@ class LangfuseClient:
         # SDK v3 renamed score() -> create_score()
         create = getattr(self._lf, "create_score", None) or getattr(self._lf, "score")
         create(**payload)
+
+    def seed_dataset(self, name: str, cases: list[Case]) -> int:
+        """Create/extend a Langfuse dataset from cases. Callers are
+        responsible for redacting PII first (the CLI does)."""
+        try:
+            self._lf.create_dataset(name=name)
+        except Exception:
+            pass  # dataset already exists
+        for case in cases:
+            self._lf.create_dataset_item(
+                dataset_name=name,
+                input=case.input,
+                expected_output=case.expected_output,
+                metadata={
+                    "expected_labels": case.expected_labels,
+                    "expected_tools": case.expected_tools,
+                    "source_case_id": case.case_id,
+                    **case.metadata,
+                },
+            )
+        return len(cases)
 
     def flush(self) -> None:
         self._lf.flush()

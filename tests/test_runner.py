@@ -15,10 +15,14 @@ from agent_evals.runner import load_cases, run_offline
 CONFIG = Path(__file__).parent.parent / "configs" / "support_agent.yaml"
 
 
+N_EVALUATORS = 9
+
+
 def test_load_config_and_cases():
     cfg = load_config(CONFIG)
     assert cfg.agent == "support-agent"
-    assert [e.name for e in cfg.evaluators] == ["goal_success", "label_match", "tool_selection"]
+    assert len(cfg.evaluators) == N_EVALUATORS
+    assert cfg.evaluators[0].name == "goal_success"
     assert cfg.evaluators[1].params == {"fields": ["category", "priority"]}
     cases = load_cases(cfg)
     assert len(cases) == 8
@@ -38,7 +42,7 @@ def test_run_offline_end_to_end(tmp_path):
 
     run_dir = Path(result.out_dir)
     assert (run_dir / "report.md").exists()
-    assert len((run_dir / "scores.jsonl").read_text().splitlines()) == 16 * 3
+    assert len((run_dir / "scores.jsonl").read_text().splitlines()) == 16 * N_EVALUATORS
 
     manifest = json.loads((run_dir / "manifest.json").read_text())
     assert manifest["judge_provider"] == "mock"
@@ -72,6 +76,28 @@ def test_missing_thresholded_metric_fails_gate(tmp_path):
     result = run_offline(cfg, k=1, out_dir=tmp_path)
     assert not result.gate_passed
     assert any("never scored" in failure for failure in result.gate_failures)
+
+
+def test_retried_execution_is_idempotent(tmp_path):
+    """A retried (run, case, repeat) must hit the score cache even though the
+    demo agent mints a random trace ID per invocation (note 09 §1)."""
+    from agent_evals.core.cache import ScoreCache
+    from agent_evals.core.judge import MockJudge
+    from agent_evals.runner import build_evaluators, resolve_task_fn, run_single_case
+
+    cfg = load_config(CONFIG)
+    judge = MockJudge()
+    evaluators, _ = build_evaluators(cfg, judge=judge)
+    task_fn = resolve_task_fn(cfg.task_fn)
+    case = load_cases(cfg)[0]
+    cache = ScoreCache(tmp_path / "scores.sqlite3")
+
+    first = run_single_case(case, task_fn, evaluators, cfg, cache, repeat_index=0, run_id="run-x")
+    retry = run_single_case(case, task_fn, evaluators, cfg, cache, repeat_index=0, run_id="run-x")
+
+    assert judge.calls == 1  # second execution served from cache
+    assert first.trace_id == retry.trace_id == "run-x/ticket-001/r0"
+    assert first.passed and retry.passed
 
 
 def test_unknown_evaluator_raises():
