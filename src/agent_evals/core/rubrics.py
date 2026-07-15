@@ -29,11 +29,11 @@ def resolve_rubric(
     if not from_langfuse:
         return fallback_text, fallback_version
 
-    if client is None:
-        from agent_evals.core.langfuse_client import LangfuseClient
-
-        client = LangfuseClient()
     try:
+        if client is None:
+            from agent_evals.core.langfuse_client import LangfuseClient
+
+            client = LangfuseClient()
         text, lf_version, config = client.get_prompt(name)
     except Exception as e:
         raise RuntimeError(
