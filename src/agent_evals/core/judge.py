@@ -56,24 +56,38 @@ class MockJudge(BaseJudge):
         return self._fn(rubric, payload)
 
 
+_VERDICT_TOOL = {
+    "name": "submit_verdict",
+    "description": "Submit the evaluation verdict. Reasoning first, then score.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "reasoning": {"type": "string", "description": "Step-by-step evaluation reasoning."},
+            "score": {"type": "number", "minimum": 0, "maximum": 1},
+        },
+        "required": ["reasoning", "score"],
+    },
+}
+
+
+def _anthropic_tool_verdict(client, model: str, rubric: str, payload: str) -> Verdict:  # pragma: no cover - network
+    msg = client.messages.create(
+        model=model,
+        max_tokens=1024,
+        system=JUDGE_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": f"{rubric}\n\n{payload}"}],
+        tools=[_VERDICT_TOOL],
+        tool_choice={"type": "tool", "name": "submit_verdict"},
+    )
+    block = next(b for b in msg.content if b.type == "tool_use")
+    return Verdict(**block.input)
+
+
 class AnthropicJudge(BaseJudge):
     """Judge via the Anthropic API. Forces a structured verdict through a
     required tool call so parsing never depends on prose style."""
 
     provider = "anthropic"
-
-    _VERDICT_TOOL = {
-        "name": "submit_verdict",
-        "description": "Submit the evaluation verdict. Reasoning first, then score.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "reasoning": {"type": "string", "description": "Step-by-step evaluation reasoning."},
-                "score": {"type": "number", "minimum": 0, "maximum": 1},
-            },
-            "required": ["reasoning", "score"],
-        },
-    }
 
     def __init__(self, model: str) -> None:
         super().__init__()
@@ -87,26 +101,189 @@ class AnthropicJudge(BaseJudge):
         self._client = anthropic.Anthropic()
 
     def _verdict(self, rubric: str, payload: str) -> Verdict:  # pragma: no cover - network
-        msg = self._client.messages.create(
+        return _anthropic_tool_verdict(self._client, self.model, rubric, payload)
+
+
+class VertexJudge(BaseJudge):
+    """Claude on Vertex AI (GCP ADC auth, no API key). Same bare model IDs
+    as the Anthropic API; Anthropic's Batches API is NOT available here —
+    batch scoring must use Vertex batch prediction (master plan §7)."""
+
+    provider = "vertex"
+
+    def __init__(self, model: str, project_id: str | None = None, region: str | None = None) -> None:
+        super().__init__()
+        try:
+            from anthropic import AnthropicVertex
+        except ImportError as e:  # pragma: no cover
+            raise ImportError(
+                "Vertex judge requires the 'anthropic' extra: pip install 'agent-evals[anthropic]'"
+            ) from e
+        self.model = model
+        kwargs = {}
+        if project_id:
+            kwargs["project_id"] = project_id
+        if region:
+            kwargs["region"] = region
+        self._client = AnthropicVertex(**kwargs)  # falls back to env/ADC
+
+    def _verdict(self, rubric: str, payload: str) -> Verdict:  # pragma: no cover - network
+        return _anthropic_tool_verdict(self._client, self.model, rubric, payload)
+
+
+class OpenAIJudge(BaseJudge):
+    """Judge via the OpenAI API, structured verdict through a forced
+    function call."""
+
+    provider = "openai"
+
+    def __init__(self, model: str) -> None:
+        super().__init__()
+        try:
+            import openai
+        except ImportError as e:  # pragma: no cover
+            raise ImportError("OpenAI judge requires: pip install openai") from e
+        self.model = model
+        self._client = openai.OpenAI()
+
+    def _verdict(self, rubric: str, payload: str) -> Verdict:  # pragma: no cover - network
+        import json
+
+        resp = self._client.chat.completions.create(
             model=self.model,
-            max_tokens=1024,
-            system=JUDGE_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": f"{rubric}\n\n{payload}"}],
-            tools=[self._VERDICT_TOOL],
-            tool_choice={"type": "tool", "name": "submit_verdict"},
+            messages=[
+                {"role": "system", "content": JUDGE_SYSTEM_PROMPT},
+                {"role": "user", "content": f"{rubric}\n\n{payload}"},
+            ],
+            tools=[{
+                "type": "function",
+                "function": {
+                    "name": "submit_verdict",
+                    "description": _VERDICT_TOOL["description"],
+                    "parameters": _VERDICT_TOOL["input_schema"],
+                },
+            }],
+            tool_choice={"type": "function", "function": {"name": "submit_verdict"}},
         )
-        block = next(b for b in msg.content if b.type == "tool_use")
-        return Verdict(**block.input)
+        args = json.loads(resp.choices[0].message.tool_calls[0].function.arguments)
+        return Verdict(**args)
 
 
-def make_judge(cfg: JudgeConfig) -> BaseJudge:
+class FallbackJudge(BaseJudge):
+    """Degrade to a second provider on primary outage/rate-limit (master
+    plan §7). provider/model always reflect whichever judge actually
+    produced the verdict, so score stamps stay truthful. Caveat (note 09):
+    a failover mid-run changes cache keys for subsequent retries."""
+
+    def __init__(self, primary: BaseJudge, fallback: BaseJudge) -> None:
+        super().__init__()
+        self._primary = primary
+        self._fallback = fallback
+        self._last = primary
+
+    @property
+    def provider(self) -> str:  # type: ignore[override]
+        return self._last.provider
+
+    @property
+    def model(self) -> str:  # type: ignore[override]
+        return self._last.model
+
+    def _verdict(self, rubric: str, payload: str) -> Verdict:
+        try:
+            self._last = self._primary
+            return self._primary.verdict(rubric, payload)
+        except Exception:
+            self._last = self._fallback
+            return self._fallback.verdict(rubric, payload)
+
+
+class BudgetExceededError(RuntimeError):
+    """Raised when the judge's daily budget is exhausted — a visible kill
+    switch, never silent degradation (note 08 rule 6)."""
+
+
+class BudgetedJudge(BaseJudge):
+    """Enforces daily_budget_usd per (day, provider, model) in a sqlite
+    counter. Accounting unit is est_cost_per_call_usd until real token
+    costing lands; the cap errs conservative."""
+
+    def __init__(self, inner: BaseJudge, daily_budget_usd: float,
+                 est_cost_per_call_usd: float = 0.01,
+                 db_path: str = "runs/judge_budget.sqlite3") -> None:
+        super().__init__()
+        import sqlite3
+        from pathlib import Path
+
+        self._inner = inner
+        self._budget = daily_budget_usd
+        self._est = est_cost_per_call_usd
+        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+        self._conn = sqlite3.connect(db_path)
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS spend (day TEXT, provider TEXT, model TEXT, usd REAL, "
+            "PRIMARY KEY (day, provider, model))"
+        )
+        self._conn.commit()
+
+    @property
+    def provider(self) -> str:  # type: ignore[override]
+        return self._inner.provider
+
+    @property
+    def model(self) -> str:  # type: ignore[override]
+        return self._inner.model
+
+    def _key(self) -> tuple[str, str, str]:
+        import datetime
+
+        return (datetime.date.today().isoformat(), self._inner.provider, self._inner.model)
+
+    def _spent(self) -> float:
+        row = self._conn.execute(
+            "SELECT usd FROM spend WHERE day=? AND provider=? AND model=?", self._key()
+        ).fetchone()
+        return row[0] if row else 0.0
+
+    def _verdict(self, rubric: str, payload: str) -> Verdict:
+        spent = self._spent()
+        if spent + self._est > self._budget:
+            raise BudgetExceededError(
+                f"daily judge budget exhausted: spent ${spent:.2f} of ${self._budget:.2f} "
+                f"({self.provider}/{self.model})"
+            )
+        verdict = self._inner.verdict(rubric, payload)
+        day, provider, model = self._key()
+        self._conn.execute(
+            "INSERT INTO spend (day, provider, model, usd) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(day, provider, model) DO UPDATE SET usd = usd + ?",
+            (day, provider, model, self._est, self._est),
+        )
+        self._conn.commit()
+        return verdict
+
+
+def _provider_judge(cfg: JudgeConfig) -> BaseJudge:
     if cfg.provider == "mock":
         return MockJudge()
     if cfg.provider == "anthropic":
         return AnthropicJudge(model=cfg.model)
-    if cfg.provider in ("vertex", "openai"):
-        raise NotImplementedError(
-            f"Judge provider '{cfg.provider}' lands in Phase 2 (see master plan §7); "
-            "use 'anthropic' or 'mock' in the Phase 0 slice."
-        )
+    if cfg.provider == "vertex":
+        return VertexJudge(model=cfg.model, project_id=cfg.project_id, region=cfg.region)
+    if cfg.provider == "openai":
+        return OpenAIJudge(model=cfg.model)
     raise ValueError(f"Unknown judge provider: {cfg.provider}")
+
+
+def make_judge(cfg: JudgeConfig) -> BaseJudge:
+    judge = _provider_judge(cfg)
+    if cfg.fallback:
+        judge = FallbackJudge(judge, _provider_judge(cfg.fallback))
+    if cfg.daily_budget_usd and cfg.provider != "mock":
+        judge = BudgetedJudge(
+            judge,
+            daily_budget_usd=cfg.daily_budget_usd,
+            est_cost_per_call_usd=cfg.est_cost_per_call_usd,
+            db_path=cfg.budget_db or "runs/judge_budget.sqlite3",
+        )
+    return judge

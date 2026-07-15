@@ -1,10 +1,22 @@
 # agent-evals
 
-Reusable eval harness for AI agents — **Phase 0 vertical slice** of the
+Reusable eval harness for AI agents, implementing the
 [master plan](https://github.com/Srinath279/agent-eval-notes) (note 00):
-canonical schemas → trace adapter → PII redaction → 3 evaluators →
-pass^k offline runner with an idempotent score cache, runnable locally with
-zero external dependencies and as a Temporal workflow.
+canonical schemas → trace adapters → PII redaction → 13 registered
+evaluators → pass^k offline runner with idempotent score caching,
+baseline/bootstrap-CI regression gating, trace-replay mode, judge
+calibration, online sampling + cheap-tier scoring, red-team suites
+(pass-100% gates), chaos injection, and Temporal workflows — runnable
+locally with zero external dependencies.
+
+```
+evals run              offline experiment (pass^k, gate, artifacts)
+evals run --mode replay --traces prod.jsonl    re-score stored traces
+evals promote-baseline                         register the current baseline
+evals calibrate        judge-vs-human agreement (kappa/pearson)
+evals seed-dataset     redacted golden-set upload to Langfuse
+evals list-evaluators
+```
 
 ## Quickstart
 
@@ -80,10 +92,29 @@ cache makes at-least-once activity retries idempotent.
   reaches a judge.
 - **The gate is the API**: CI/CD consumes the exit code and `report.md`.
 
-## Roadmap (from the master plan)
+## Implemented phases (code-complete; see the notes repo for the plan)
 
-Phase 1: full deterministic set, real golden data, Cloud Run workers ·
-Phase 2: Vertex/OpenAI judges, calibration vs annotations, bootstrap-CI
-gating, trace-replay mode · Phase 3: online `TraceScoreWorkflow`, budgets,
-feedback ingestion, BigQuery export · Phase 4+: onboarding kit, batch
-judging, simulated users, red-team, chaos.
+- **Phase 0–1**: schemas, `langfuse-generic` adapter, PII redaction, full
+  deterministic + trajectory evaluator set, pass^k runner, gate, artifacts.
+- **Phase 2**: multi-provider judges (Anthropic, **Vertex**, **OpenAI**) with
+  **fallback** and truthful score stamping; **daily budget enforcement**
+  (`BudgetExceededError` kill switch); **baseline registry +
+  bootstrap-CI regression gating**; **trace-replay mode**; `evals calibrate`
+  (Cohen's kappa / Pearson vs human labels).
+- **Phase 3**: online sampling (`should_score`: rate + 100% of tool-error /
+  negative-feedback / latency / cost outliers), cheap-tier `score_online`,
+  `TraceScoreWorkflow`, annotation-queue push (best-effort with graceful
+  fallback), `post_user_feedback`, BigQuery export.
+- **Phase 4/5 (code parts)**: onboarding kit (`configs/_template.yaml` +
+  `assert_adapter_conformance`), failure clustering in reports, **red-team
+  suite** (`gate_mode: all`, `forbidden_content`), **chaos injection**
+  (`ChaosInjector`) + `recovery_after_error`.
+
+## Remaining wiring (needs your infra, not code)
+
+dev/staging/prod Langfuse projects + Secret Manager keys · seed the real
+golden set (`evals seed-dataset`) · Temporal workers on Cloud Run against
+the real cluster + Schedules · Pub/Sub starter for `TraceScoreWorkflow` ·
+BigQuery dataset + Looker dashboards · CI wiring (`evals run --baselines`
+exit code as the PR gate). Later code phases: batch judging APIs,
+simulated users (τ-bench style), drift detection, canary/shadow workflows.

@@ -5,5 +5,7 @@ import agent_evals.evaluators.deterministic.label_match  # noqa: F401
 import agent_evals.evaluators.deterministic.thresholds  # noqa: F401
 import agent_evals.evaluators.deterministic.tool_called  # noqa: F401
 import agent_evals.evaluators.trajectory.efficiency  # noqa: F401
+import agent_evals.evaluators.trajectory.recovery  # noqa: F401
 import agent_evals.evaluators.trajectory.tool_selection  # noqa: F401
 import agent_evals.evaluators.llm_judge.goal_success  # noqa: F401
+import agent_evals.evaluators.safety.forbidden_content  # noqa: F401

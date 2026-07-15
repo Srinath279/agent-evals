@@ -71,5 +71,36 @@ class LangfuseClient:
             )
         return len(cases)
 
+    def fetch_trace_raw(self, trace_id: str) -> dict:
+        """Fetch a trace + its observations in the adapter-shaped raw dict
+        (see adapters.langfuse_generic). Used by the online pipeline."""
+        fetch = getattr(self._lf, "fetch_trace", None) or getattr(self._lf, "get_trace")
+        trace = fetch(trace_id)
+        data = getattr(trace, "data", trace)
+        as_dict = data.dict() if hasattr(data, "dict") else dict(data)
+        observations = as_dict.pop("observations", None) or []
+        observations = [o.dict() if hasattr(o, "dict") else dict(o) for o in observations]
+        return {"trace": as_dict, "observations": observations}
+
+    def enqueue_annotation(self, trace_id: str, queue_name: str, reason: str) -> bool:
+        """Push a trace into an annotation queue (below-threshold traces →
+        human review → golden-set candidates). Best-effort: queue APIs vary
+        by Langfuse version/tier, so failures degrade to a tagged comment
+        score instead of dropping the signal."""
+        try:
+            api = self._lf.api  # low-level generated client
+            queues = api.annotation_queues.list_queues()
+            queue = next(q for q in queues.data if q.name == queue_name)
+            api.annotation_queues.create_queue_item(
+                queue_id=queue.id, object_id=trace_id, object_type="TRACE"
+            )
+            return True
+        except Exception:
+            self.post_score(Score(
+                name="needs_annotation", value=1.0, trace_id=trace_id,
+                comment=f"[{queue_name}] {reason}", level="session",
+            ))
+            return False
+
     def flush(self) -> None:
         self._lf.flush()

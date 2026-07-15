@@ -24,6 +24,37 @@ def list_case_ids(config_path: str) -> list[str]:
 
 
 @activity.defn
+def score_online_trace(config_path: str, trace_id: str, cache_dir: str) -> dict:
+    """Online mode: fetch one sampled production trace from Langfuse, score
+    it with the cheap-tier evaluators, write scores back, and push
+    below-threshold traces to the annotation queue (the flywheel intake)."""
+    from agent_evals.core.adapters import get_adapter
+    from agent_evals.core.langfuse_client import LangfuseClient
+    from agent_evals.online import score_online
+
+    cfg = load_config(config_path)
+    client = LangfuseClient()
+    raw = client.fetch_trace_raw(trace_id)
+    trace = get_adapter(cfg.trace_adapter).to_trace(raw)
+
+    cache = ScoreCache(Path(cache_dir) / "online.sqlite3")
+    try:
+        scores, failures = score_online(trace, cfg, cache=cache, post_to_langfuse=True)
+    finally:
+        cache.close()
+
+    if failures:
+        client.enqueue_annotation(
+            trace_id, queue_name=f"{cfg.agent}-review", reason="; ".join(failures)
+        )
+    return {
+        "trace_id": trace_id,
+        "scores": {s.name: s.value for s in scores},
+        "failures": failures,
+    }
+
+
+@activity.defn
 def score_case(config_path: str, case_id: str, repeat_index: int, run_id: str, cache_dir: str) -> dict:
     cfg = load_config(config_path)
     case = next(c for c in load_cases(cfg) if c.case_id == case_id)

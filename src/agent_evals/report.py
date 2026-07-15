@@ -35,6 +35,23 @@ def render_report(result: "RunResult", cfg: "AgentConfig") -> str:
             lines.append(f"| {name} | {mean:.3f} | {threshold} | {status} |")
     lines.append("")
 
+    if result.baseline_comparison:
+        lines += ["## Baseline comparison", "",
+                  "| metric | Δ mean | 95% CI | verdict |", "|---|---|---|---|"]
+        for metric, cmp in result.baseline_comparison.items():
+            lo, hi = cmp["ci"]
+            verdict = "❌ regression" if cmp["regression"] else "✅ ok"
+            lines.append(f"| {metric} | {cmp['mean_diff']:+.3f} | [{lo:+.3f}, {hi:+.3f}] | {verdict} |")
+        lines += ["", f"Baseline run: `{next(iter(result.baseline_comparison.values()))['baseline_run']}`", ""]
+
+    if result.failure_clusters:
+        lines += ["## Failure clusters", ""]
+        for metric, cluster in sorted(result.failure_clusters.items(),
+                                      key=lambda kv: -kv[1]["count"]):
+            lines.append(f"### {metric} — {cluster['count']} failing execution(s)")
+            lines += [f"- {ex}" for ex in cluster["examples"]]
+            lines.append("")
+
     failing = [cr for cr in result.case_results if not cr.passed]
     if failing:
         lines += ["## Failing executions", ""]

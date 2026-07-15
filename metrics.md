@@ -18,6 +18,10 @@ go through PR review (CODEOWNERS).
 | `redundant_calls` | 0–1 | higher better | trace | deterministic (trajectory) | platform | Unique (tool, arguments) signatures / total tool calls. 1.0 = no identical repeated invocations. |
 | `tool_success_rate` | 0–1 | higher better | trace | deterministic (trajectory) | platform | Fraction of tool calls that did not error. Vacuously 1.0 with no tool calls. |
 | `steps_efficiency` | 0–1 | higher better | trace | deterministic (trajectory) | platform | 1.0 when steps <= `max_steps` (param or case metadata), else max_steps/steps. Vacuously 1.0 unconfigured. |
+| `recovery_after_error` | 0–1 | higher better | trace | deterministic (resilience) | platform | Per failed tool call: did a later call to the same tool succeed? recovered/failed; vacuously 1.0 with no failures. Pairs with chaos injection. |
+| `forbidden_content` | 0/1 | higher better | output | deterministic (safety) | platform | Output matches none of the configured regexes (leaks, injection echoes). Red-team suites gate this at 1.0 with gate_mode: all. |
+| `user_feedback` | 0/1 | higher better | session | human | platform | End-user thumbs posted by the app via `post_user_feedback` (1.0 up, 0.0 down), trace_id propagated from the agent response. |
+| `needs_annotation` | 1 | flag | session | system | platform | Written by the online pipeline when annotation-queue push isn't available — marks below-threshold traces for human review. |
 
 ## Rules
 

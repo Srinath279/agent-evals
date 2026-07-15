@@ -13,9 +13,30 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
-    from agent_evals.pipelines.activities import list_case_ids, score_case
+    from agent_evals.pipelines.activities import list_case_ids, score_case, score_online_trace
 
 CHUNK_SIZE = 50  # fan out in chunks to keep workflow histories small (rule 5)
+
+
+@workflow.defn
+class TraceScoreWorkflow:
+    """Online mode (master plan §9): one short workflow per sampled
+    production trace, started by the Pub/Sub subscriber (or a polling
+    workflow owning the Langfuse cursor). Sampling happens in the starter;
+    this workflow scores unconditionally."""
+
+    @workflow.run
+    async def run(self, config_path: str, trace_id: str, cache_dir: str) -> dict:
+        return await workflow.execute_activity(
+            score_online_trace,
+            args=[config_path, trace_id, cache_dir],
+            start_to_close_timeout=timedelta(minutes=5),
+            retry_policy=RetryPolicy(
+                initial_interval=timedelta(seconds=5),
+                backoff_coefficient=2.0,
+                maximum_attempts=5,
+            ),
+        )
 
 
 @workflow.defn

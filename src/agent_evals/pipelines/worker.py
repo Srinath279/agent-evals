@@ -19,8 +19,8 @@ import os
 from temporalio.client import Client
 from temporalio.worker import Worker
 
-from agent_evals.pipelines.activities import list_case_ids, score_case
-from agent_evals.pipelines.workflows import EvalRunWorkflow
+from agent_evals.pipelines.activities import list_case_ids, score_case, score_online_trace
+from agent_evals.pipelines.workflows import EvalRunWorkflow, TraceScoreWorkflow
 
 TASK_QUEUE = "agent-evals"
 
@@ -30,8 +30,8 @@ async def main() -> None:
     worker = Worker(
         client,
         task_queue=TASK_QUEUE,
-        workflows=[EvalRunWorkflow],
-        activities=[list_case_ids, score_case],
+        workflows=[EvalRunWorkflow, TraceScoreWorkflow],
+        activities=[list_case_ids, score_case, score_online_trace],
     )
     print(f"agent-evals worker listening on task queue '{TASK_QUEUE}'")
     await worker.run()

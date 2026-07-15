@@ -1,0 +1,49 @@
+# Onboarding template — copy per agent (see README "Onboarding a real agent").
+# An agent onboards with: this file + a trace adapter + optional custom
+# evaluators. Run the adapter conformance check first:
+#   from agent_evals.testing import assert_adapter_conformance
+agent: CHANGE-ME
+trace_adapter: langfuse-generic     # or your framework-specific adapter
+task_fn: your_package.agent:invoke  # contract: task_fn(case_input) -> Trace
+langfuse_dataset: CHANGE-ME-golden-v1
+# local_dataset: ../datasets/CHANGE-ME.jsonl   # local JSONL alternative
+
+trace_filter: {tags: ["CHANGE-ME"], environment: "prod"}
+online_sample_rate: 0.10
+outlier_latency_ms: 30000     # traces above this are ALWAYS scored online
+outlier_cost_usd: 0.50
+repeats: 3                    # k for pass^k
+
+judge:
+  provider: anthropic         # anthropic | vertex | openai | mock
+  model: claude-opus-4-8      # pinned; provider+model stamped on every score
+  fallback:
+    provider: vertex
+    model: claude-opus-4-8
+  daily_budget_usd: 25        # hard cap per (day, provider, model)
+  est_cost_per_call_usd: 0.01
+
+evaluators:                   # every name must exist in metrics.md
+  - goal_success
+  - name: label_match
+    fields: [CHANGE, ME]
+  - tool_selection
+  - tool_called
+  - tool_success_rate
+  - redundant_calls
+  - recovery_after_error
+  - name: latency_threshold
+    threshold_ms: 20000
+  - name: cost_threshold
+    max_usd: 0.15
+
+online_evaluators:            # cheap tier for sampled production traces
+  - tool_success_rate
+  - redundant_calls
+  - goal_success
+
+gate_mode: mean               # "all" for red-team / pass-100% suites
+score_thresholds:
+  goal_success: 0.85
+  label_match: 0.90
+  tool_selection: 0.90

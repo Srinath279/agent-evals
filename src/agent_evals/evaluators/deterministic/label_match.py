@@ -27,6 +27,7 @@ def _output_as_dict(output: Any) -> dict[str, Any]:
 class LabelMatchEvaluator(BaseEvaluator):
     name = "label_match"
     level = "output"
+    requires_case = True
 
     def evaluate(self, trace: Trace, case: Optional[Case] = None) -> Score:
         if case is None or not case.expected_labels:

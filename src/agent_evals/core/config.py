@@ -15,7 +15,12 @@ class JudgeConfig(BaseModel):
     provider: str = "mock"  # mock | anthropic | vertex | openai
     model: str = "mock-judge"
     fallback: Optional["JudgeConfig"] = None
-    daily_budget_usd: Optional[float] = None  # enforced in Phase 3 (judge activity)
+    daily_budget_usd: Optional[float] = None      # hard cap, enforced per (day, provider, model)
+    est_cost_per_call_usd: float = 0.01           # budget accounting unit until real token costing
+    budget_db: Optional[str] = None               # sqlite path; default runs/judge_budget.sqlite3
+    # vertex only (fall back to GCP env/ADC when unset)
+    project_id: Optional[str] = None
+    region: Optional[str] = None
 
 
 class EvaluatorSpec(BaseModel):
@@ -34,12 +39,22 @@ class AgentConfig(BaseModel):
     repeats: int = 1  # k for pass^k
     judge: JudgeConfig = Field(default_factory=JudgeConfig)
     evaluators: list[EvaluatorSpec] = Field(default_factory=list)
+    # cheap-tier subset for online scoring; empty = non-judge evaluators only
+    online_evaluators: list[EvaluatorSpec] = Field(default_factory=list)
     score_thresholds: dict[str, float] = Field(default_factory=dict)
+    # "mean": gate on metric means (default). "all": every execution must pass
+    # every threshold — the red-team / pass-100% gate (master plan §9).
+    gate_mode: str = "mean"
+    # online sampling: traces above these are always scored (suspicious)
+    outlier_latency_ms: Optional[float] = None
+    outlier_cost_usd: Optional[float] = None
+    # raw traces JSONL for replay mode (adapter-shaped lines)
+    replay_traces: Optional[str] = None
 
     # set by load_config so relative paths resolve against the config file
     config_dir: Optional[str] = None
 
-    @field_validator("evaluators", mode="before")
+    @field_validator("evaluators", "online_evaluators", mode="before")
     @classmethod
     def _normalize_evaluators(cls, v: list[Union[str, dict]]) -> list[dict]:
         specs = []

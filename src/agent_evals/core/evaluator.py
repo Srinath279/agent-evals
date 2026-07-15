@@ -53,6 +53,9 @@ class BaseEvaluator(ABC):
     name: str = ""
     level: str = "trace"  # output | trace | session
     requires_judge: bool = False
+    # needs a golden Case to grade (fail-closed without one) — excluded from
+    # the default online tier, where production traces have no case
+    requires_case: bool = False
     # judge evaluators must bump this whenever their rubric text changes;
     # it is part of the score-cache key and stamped on every score
     rubric_version: str = "n/a"

@@ -14,6 +14,7 @@ from agent_evals.core.schemas import Case, Score, Trace
 class ExactMatchEvaluator(BaseEvaluator):
     name = "exact_match"
     level = "output"
+    requires_case = True
 
     def _norm(self, value: Any) -> Any:
         if isinstance(value, str) and self.params.get("normalize", True):

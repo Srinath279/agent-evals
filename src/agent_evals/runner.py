@@ -1,7 +1,10 @@
-"""Offline experiment runner with pass^k (master plan §8, §9).
+"""Offline runner (master plan §8, §9): experiment mode (invoke the agent
+over the golden set, k repeats for pass^k) and trace-replay mode (re-score
+stored trajectories without re-invoking the agent — cheap regression for
+judge/rubric changes and backfills).
 
-Pure library code — no Temporal imports. cli.py calls run_offline
-directly; the Temporal EvalRunWorkflow calls the same building blocks
+Pure library code — no Temporal imports. cli.py calls run_offline directly;
+the Temporal EvalRunWorkflow calls the same building blocks
 (load_cases / run_single_case / score_trace) from activities.
 """
 
@@ -17,6 +20,8 @@ from typing import Callable, Optional
 
 import agent_evals.evaluators  # noqa: F401  (registers built-ins)
 from agent_evals import __version__
+from agent_evals.baselines import compare_to_baseline, load_baseline
+from agent_evals.core.adapters import get_adapter
 from agent_evals.core.cache import ScoreCache, score_cache_key
 from agent_evals.core.config import AgentConfig
 from agent_evals.core.evaluator import (
@@ -51,11 +56,24 @@ def resolve_task_fn(spec: str) -> Callable:
     return getattr(importlib.import_module(module_name), attr)
 
 
-def build_evaluators(cfg: AgentConfig, judge: Optional[BaseJudge] = None) -> tuple[list[BaseEvaluator], Optional[BaseJudge]]:
-    needs_judge = any(evaluator_requires_judge(s.name) for s in cfg.evaluators)
+def build_evaluators(
+    cfg: AgentConfig,
+    judge: Optional[BaseJudge] = None,
+    online: bool = False,
+) -> tuple[list[BaseEvaluator], Optional[BaseJudge]]:
+    specs = cfg.evaluators
+    if online:
+        # cheap tier: explicit online_evaluators, else the deterministic subset
+        # that can grade a bare production trace (no judge, no golden case)
+        specs = cfg.online_evaluators or [
+            s for s in cfg.evaluators
+            if not evaluator_requires_judge(s.name)
+            and not getattr(get_evaluator_class(s.name), "requires_case", False)
+        ]
+    needs_judge = any(evaluator_requires_judge(s.name) for s in specs)
     if needs_judge and judge is None:
         judge = make_judge(cfg.judge)
-    return [create_evaluator(spec, judge=judge) for spec in cfg.evaluators], judge
+    return [create_evaluator(spec, judge=judge) for spec in specs], judge
 
 
 def score_trace(
@@ -114,6 +132,8 @@ class RunResult:
     pass_k_rate: float     # fraction of cases meeting all thresholds on EVERY repeat
     gate_passed: bool
     gate_failures: list[str]
+    baseline_comparison: dict[str, dict] = field(default_factory=dict)
+    failure_clusters: dict[str, dict] = field(default_factory=dict)
     out_dir: Optional[str] = None
 
 
@@ -161,6 +181,57 @@ def run_single_case(
     )
 
 
+def _replay_case_results(
+    cfg: AgentConfig,
+    traces_path: Path,
+    evaluators: list[BaseEvaluator],
+    cache: Optional[ScoreCache],
+) -> list[CaseRunResult]:
+    """Trace-replay mode: raw adapter-shaped trace lines -> canonical traces
+    -> scores, no agent invocation. Traces link to golden cases via
+    metadata.case_id when present."""
+    try:
+        cases_by_id = {c.case_id: c for c in load_cases(cfg)}
+    except ValueError:
+        cases_by_id = {}
+    adapter = get_adapter(cfg.trace_adapter)
+
+    results = []
+    with open(traces_path) as f:
+        for line in f:
+            if not line.strip():
+                continue
+            trace = adapter.to_trace(json.loads(line))
+            case = cases_by_id.get(trace.metadata.get("case_id"))
+            scores = score_trace(trace, case, evaluators, cache=cache)
+            failures = _check_thresholds(scores, cfg.score_thresholds)
+            results.append(
+                CaseRunResult(
+                    case_id=case.case_id if case else trace.trace_id,
+                    repeat_index=0,
+                    trace_id=trace.trace_id,
+                    scores=scores,
+                    passed=not failures,
+                    failures=failures,
+                )
+            )
+    return results
+
+
+def _cluster_failures(case_results: list[CaseRunResult]) -> dict[str, dict]:
+    """Group failing executions by metric — the first cut of failure
+    clustering (note 06 §13): a dropping gate points at what to fix."""
+    clusters: dict[str, dict] = {}
+    for cr in case_results:
+        for failure in cr.failures:
+            metric = failure.split(":", 1)[0]
+            cluster = clusters.setdefault(metric, {"count": 0, "examples": []})
+            cluster["count"] += 1
+            if len(cluster["examples"]) < 3:
+                cluster["examples"].append(f"[{cr.case_id} r{cr.repeat_index}] {failure}")
+    return clusters
+
+
 def run_offline(
     cfg: AgentConfig,
     k: Optional[int] = None,
@@ -168,31 +239,43 @@ def run_offline(
     judge: Optional[BaseJudge] = None,
     cache: Optional[ScoreCache] = None,
     post_to_langfuse: bool = False,
+    mode: str = "experiment",  # experiment | replay
+    traces_path: Optional[str | Path] = None,
+    baselines_dir: Optional[str | Path] = None,
 ) -> RunResult:
-    k = k or cfg.repeats
+    k = (k or cfg.repeats) if mode == "experiment" else 1
     run_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
     run_dir = Path(out_dir) / f"{cfg.agent}-{run_id}"
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    if cfg.task_fn is None:
-        raise ValueError("Offline experiment mode requires task_fn (trace-replay mode lands in Phase 2)")
-    task_fn = resolve_task_fn(cfg.task_fn)
     evaluators, judge = build_evaluators(cfg, judge=judge)
     cache = cache or ScoreCache(run_dir / "scores.sqlite3")
-    cases = load_cases(cfg)
 
-    case_results: list[CaseRunResult] = []
-    for case in cases:
-        for r in range(k):
-            case_results.append(
-                run_single_case(case, task_fn, evaluators, cfg, cache, repeat_index=r, run_id=run_id)
-            )
+    if mode == "replay":
+        source = traces_path or (cfg.resolve_path(cfg.replay_traces) if cfg.replay_traces else None)
+        if source is None:
+            raise ValueError("Replay mode requires traces_path or config replay_traces")
+        case_results = _replay_case_results(cfg, Path(source), evaluators, cache)
+        n_cases = len(case_results)
+    elif mode == "experiment":
+        if cfg.task_fn is None:
+            raise ValueError("Experiment mode requires task_fn (or use --mode replay)")
+        task_fn = resolve_task_fn(cfg.task_fn)
+        cases = load_cases(cfg)
+        n_cases = len(cases)
+        case_results = [
+            run_single_case(case, task_fn, evaluators, cfg, cache, repeat_index=r, run_id=run_id)
+            for case in cases
+            for r in range(k)
+        ]
+    else:
+        raise ValueError(f"Unknown mode: {mode}")
 
     all_scores = [s for cr in case_results for s in cr.scores]
-    metric_means: dict[str, float] = {}
-    for name in sorted({s.name for s in all_scores}):
-        values = [s.value for s in all_scores if s.name == name]
-        metric_means[name] = sum(values) / len(values)
+    metric_values: dict[str, list[float]] = {}
+    for score in all_scores:
+        metric_values.setdefault(score.name, []).append(score.value)
+    metric_means = {name: sum(v) / len(v) for name, v in sorted(metric_values.items())}
 
     pass_rate = sum(cr.passed for cr in case_results) / len(case_results) if case_results else 0.0
     by_case: dict[str, list[bool]] = {}
@@ -202,6 +285,7 @@ def run_offline(
         sum(all(passes) for passes in by_case.values()) / len(by_case) if by_case else 0.0
     )
 
+    # --- gate ---
     gate_failures = []
     for metric, threshold in cfg.score_thresholds.items():
         mean = metric_means.get(metric)
@@ -210,21 +294,45 @@ def run_offline(
         elif mean < threshold:
             gate_failures.append(f"{metric}: mean {mean:.3f} < {threshold}")
 
+    if cfg.gate_mode == "all" and pass_rate < 1.0:
+        failing = sum(not cr.passed for cr in case_results)
+        gate_failures.append(
+            f"gate_mode=all: {failing}/{len(case_results)} executions failed (pass-100% required)"
+        )
+
+    baseline_comparison: dict[str, dict] = {}
+    if baselines_dir:
+        baseline = load_baseline(baselines_dir, cfg.agent)
+        if baseline:
+            baseline_comparison = compare_to_baseline(
+                baseline, metric_values, list(cfg.score_thresholds)
+            )
+            for metric, cmp in baseline_comparison.items():
+                if cmp["regression"]:
+                    lo, hi = cmp["ci"]
+                    gate_failures.append(
+                        f"{metric}: significant regression vs baseline "
+                        f"{cmp['baseline_run']} (diff {cmp['mean_diff']:+.3f}, "
+                        f"95% CI [{lo:+.3f}, {hi:+.3f}])"
+                    )
+
     result = RunResult(
         run_id=run_id,
         agent=cfg.agent,
         k=k,
-        n_cases=len(cases),
+        n_cases=n_cases,
         case_results=case_results,
         metric_means=metric_means,
         pass_rate=pass_rate,
         pass_k_rate=pass_k_rate,
         gate_passed=not gate_failures,
         gate_failures=gate_failures,
+        baseline_comparison=baseline_comparison,
+        failure_clusters=_cluster_failures(case_results),
         out_dir=str(run_dir),
     )
 
-    _write_artifacts(result, cfg, judge, run_dir, all_scores)
+    _write_artifacts(result, cfg, judge, run_dir, all_scores, mode)
 
     if post_to_langfuse:
         from agent_evals.core.langfuse_client import LangfuseClient
@@ -243,6 +351,7 @@ def _write_artifacts(
     judge: Optional[BaseJudge],
     run_dir: Path,
     all_scores: list[Score],
+    mode: str,
 ) -> None:
     with open(run_dir / "scores.jsonl", "w") as f:
         for score in all_scores:
@@ -253,6 +362,7 @@ def _write_artifacts(
         "run_id": result.run_id,
         "harness_version": __version__,
         "agent": cfg.agent,
+        "mode": mode,
         "k": result.k,
         "dataset": cfg.langfuse_dataset or cfg.local_dataset,
         "judge_provider": judge.provider if judge else None,
