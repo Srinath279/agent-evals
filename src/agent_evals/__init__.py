@@ -12,6 +12,6 @@ Design rules honored here:
 - The score cache is the idempotency layer for judge calls.
 """
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 from agent_evals.core.schemas import Case, Score, ToolCall, Trace  # noqa: F401

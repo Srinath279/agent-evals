@@ -148,11 +148,15 @@ class OpenAIJudge(BaseJudge):
 
     def _verdict(self, rubric: str, payload: str) -> Verdict:  # pragma: no cover - network
         import json
+        import re
 
         resp = self._client.chat.completions.create(
             model=self.model,
             messages=[
-                {"role": "system", "content": JUDGE_SYSTEM_PROMPT},
+                {"role": "system",
+                 "content": JUDGE_SYSTEM_PROMPT
+                 + ' Respond by calling submit_verdict, or with ONLY a JSON object '
+                   '{"reasoning": "...", "score": 0.0-1.0}.'},
                 {"role": "user", "content": f"{rubric}\n\n{payload}"},
             ],
             tools=[{
@@ -165,8 +169,18 @@ class OpenAIJudge(BaseJudge):
             }],
             tool_choice={"type": "function", "function": {"name": "submit_verdict"}},
         )
-        args = json.loads(resp.choices[0].message.tool_calls[0].function.arguments)
-        return Verdict(**args)
+        message = resp.choices[0].message
+        if message.tool_calls:
+            args = json.loads(message.tool_calls[0].function.arguments)
+            return Verdict(**args)
+        # OpenAI-compatible local servers (Ollama, vLLM) don't always honor a
+        # forced tool_choice — fall back to parsing a JSON object from content
+        match = re.search(r"\{.*\}", message.content or "", re.DOTALL)
+        if not match:
+            raise ValueError(f"judge returned neither tool call nor JSON: {message.content!r:.200}")
+        data = json.loads(match.group(0))
+        return Verdict(reasoning=str(data.get("reasoning", "")),
+                       score=max(0.0, min(1.0, float(data["score"]))))
 
 
 class FallbackJudge(BaseJudge):

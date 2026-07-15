@@ -33,6 +33,12 @@ def main(argv: list[str] | None = None) -> int:
     promote_parser.add_argument("--run", required=True, help="run directory (contains scores.jsonl)")
     promote_parser.add_argument("--baselines", default="baselines")
 
+    push_parser = sub.add_parser(
+        "push-rubrics",
+        help="seed/update judge rubrics in Langfuse Prompt Management (version-continuous)",
+    )
+    push_parser.add_argument("--config", required=True)
+
     cal_parser = sub.add_parser("calibrate",
                                 help="judge-vs-human agreement (kappa, pearson) for one metric")
     cal_parser.add_argument("--scores", required=True, help="scores.jsonl from a run")
@@ -70,6 +76,27 @@ def main(argv: list[str] | None = None) -> int:
     from agent_evals.runner import run_offline
 
     cfg = load_config(args.config)
+
+    if args.command == "push-rubrics":
+        import agent_evals.evaluators  # noqa: F401
+        from agent_evals.core.evaluator import get_evaluator_class
+        from agent_evals.core.langfuse_client import LangfuseClient
+
+        client = LangfuseClient()
+        pushed = 0
+        for spec in cfg.evaluators:
+            cls = get_evaluator_class(spec.name)
+            rubric_text = getattr(cls, "rubric_text", None)
+            if not (cls and cls.requires_judge and rubric_text):
+                continue
+            rubric_name = spec.params.get("rubric_name", cls.rubric_name)
+            client.push_prompt(rubric_name, rubric_text, cls.rubric_version)
+            print(f"pushed rubric '{rubric_name}' (version pinned: {cls.rubric_version})")
+            pushed += 1
+        client.flush()
+        if not pushed:
+            print("no judge rubrics found in this config")
+        return 0
 
     if args.command == "promote-baseline":
         from agent_evals.baselines import promote_baseline

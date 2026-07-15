@@ -1,6 +1,6 @@
 [project]
 name = "agent-evals"
-version = "0.3.0"
+version = "0.4.0"
 description = "Reusable eval harness for AI agents — Langfuse as system of record, multi-provider LLM judges, pass^k offline runner (Phase 0 vertical slice)"
 requires-python = ">=3.10"
 dependencies = [

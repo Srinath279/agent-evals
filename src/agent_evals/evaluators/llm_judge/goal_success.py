@@ -45,6 +45,23 @@ class GoalSuccessEvaluator(BaseEvaluator):
     level = "session"
     requires_judge = True
     rubric_version = RUBRIC_VERSION
+    # defaults used by `evals push-rubrics` to seed Prompt Management
+    rubric_name = "evals/goal_success"
+    rubric_text = RUBRIC
+
+    def __init__(self, **params) -> None:
+        super().__init__(**params)
+        from agent_evals.core.rubrics import resolve_rubric
+
+        # instance attrs shadow the class defaults; the score-cache key and
+        # score stamps read rubric_version, so it must be resolved before
+        # any evaluate() call
+        self.rubric_text, self.rubric_version = resolve_rubric(
+            params.get("rubric_name", self.rubric_name),
+            RUBRIC,
+            RUBRIC_VERSION,
+            from_langfuse=params.get("rubric_from_langfuse", False),
+        )
 
     def evaluate(self, trace: Trace, case: Optional[Case] = None) -> Score:
         tools = [
@@ -58,7 +75,7 @@ class GoalSuccessEvaluator(BaseEvaluator):
             f"AGENT_OUTPUT:\n{_fmt(trace.output)}\n\n"
             f"TOOL_CALLS:\n{_fmt(tools)}"
         )
-        verdict = self.judge.verdict(RUBRIC, payload)
+        verdict = self.judge.verdict(self.rubric_text, payload)
         return Score(
             name=self.name,
             value=verdict.score,

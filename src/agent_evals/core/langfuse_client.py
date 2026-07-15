@@ -71,6 +71,24 @@ class LangfuseClient:
             )
         return len(cases)
 
+    def get_prompt(self, name: str) -> tuple[str, int, dict]:
+        """(text, version, config) from Langfuse Prompt Management.
+        cache_ttl_seconds=0 so eval runs always see the labeled version."""
+        prompt = self._lf.get_prompt(name, cache_ttl_seconds=0)
+        return prompt.prompt, prompt.version, dict(prompt.config or {})
+
+    def push_prompt(self, name: str, text: str, rubric_version: str) -> None:
+        """Create/update a rubric in Prompt Management, pinning our
+        rubric_version string in the prompt config (note 09 §8: version
+        continuity across the storage migration)."""
+        self._lf.create_prompt(
+            name=name,
+            prompt=text,
+            type="text",
+            labels=["production"],
+            config={"rubric_version": rubric_version},
+        )
+
     def fetch_trace_raw(self, trace_id: str) -> dict:
         """Fetch a trace + its observations in the adapter-shaped raw dict
         (see adapters.langfuse_generic). Used by the online pipeline."""
