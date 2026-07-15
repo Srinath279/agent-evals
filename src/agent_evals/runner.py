@@ -49,10 +49,20 @@ def load_cases(cfg: AgentConfig) -> list[Case]:
 
 def resolve_task_fn(spec: str) -> Callable:
     """Resolve 'package.module:function' (or dotted fallback) to a callable.
-    Contract: task_fn(case_input) -> Trace (or a dict coercible to one)."""
+    Contract: task_fn(case_input) -> Trace (or a dict coercible to one).
+
+    The working directory is added to sys.path so project-local task modules
+    (e.g. an `evals/` package at the repo root) resolve when the `evals`
+    console script runs from an installed environment."""
+    import os
+    import sys
+
     module_name, _, attr = spec.partition(":")
     if not attr:
         module_name, _, attr = spec.rpartition(".")
+    cwd = os.getcwd()
+    if cwd not in sys.path:
+        sys.path.insert(0, cwd)
     return getattr(importlib.import_module(module_name), attr)
 
 
