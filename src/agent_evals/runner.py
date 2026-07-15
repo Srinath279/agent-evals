@@ -248,6 +248,11 @@ def run_offline(
     run_dir = Path(out_dir) / f"{cfg.agent}-{run_id}"
     run_dir.mkdir(parents=True, exist_ok=True)
 
+    # Resolve task_fn BEFORE building evaluators: importing the task module
+    # is what registers an agent's custom evaluators.
+    task_fn = None
+    if cfg.task_fn:
+        task_fn = resolve_task_fn(cfg.task_fn)
     evaluators, judge = build_evaluators(cfg, judge=judge)
     cache = cache or ScoreCache(run_dir / "scores.sqlite3")
 
@@ -258,9 +263,8 @@ def run_offline(
         case_results = _replay_case_results(cfg, Path(source), evaluators, cache)
         n_cases = len(case_results)
     elif mode == "experiment":
-        if cfg.task_fn is None:
+        if task_fn is None:
             raise ValueError("Experiment mode requires task_fn (or use --mode replay)")
-        task_fn = resolve_task_fn(cfg.task_fn)
         cases = load_cases(cfg)
         n_cases = len(cases)
         case_results = [
