@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from concurrent.futures import ThreadPoolExecutor
 
 from temporalio.client import Client
 from temporalio.worker import Worker
@@ -32,6 +33,9 @@ async def main() -> None:
         task_queue=TASK_QUEUE,
         workflows=[EvalRunWorkflow, TraceScoreWorkflow],
         activities=[list_case_ids, score_case, score_online_trace],
+        # activities are sync (they call the library + agent task_fns) —
+        # temporalio requires an executor for sync activities
+        activity_executor=ThreadPoolExecutor(max_workers=8),
     )
     print(f"agent-evals worker listening on task queue '{TASK_QUEUE}'")
     await worker.run()
