@@ -40,7 +40,7 @@ def score_online(
     cfg: AgentConfig,
     judge: Optional[BaseJudge] = None,
     cache: Optional[ScoreCache] = None,
-    post_to_langfuse: bool = False,
+    post_scores: bool = False,
 ) -> tuple[list[Score], list[str]]:
     """Score one production trace with the cheap-tier evaluator subset.
     Returns (scores, threshold_failures); failures make the trace an
@@ -51,11 +51,11 @@ def score_online(
         scores, {m: t for m, t in cfg.score_thresholds.items()
                  if m in {s.name for s in scores}}
     )
-    if post_to_langfuse:
-        from agent_evals.core.langfuse_client import LangfuseClient
+    if post_scores:
+        from agent_evals.core.store import get_store
 
-        client = LangfuseClient()
+        store = get_store(cfg.trace_store)
         for score in scores:
-            client.post_score(score)
-        client.flush()
+            store.post_score(score)
+        store.flush()
     return scores, failures

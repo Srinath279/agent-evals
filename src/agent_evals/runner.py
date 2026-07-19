@@ -40,11 +40,11 @@ def load_cases(cfg: AgentConfig) -> list[Case]:
         path = cfg.resolve_path(cfg.local_dataset)
         with open(path) as f:
             return [Case(**json.loads(line)) for line in f if line.strip()]
-    if cfg.langfuse_dataset:
-        from agent_evals.core.langfuse_client import LangfuseClient
+    if cfg.dataset:
+        from agent_evals.core.store import get_store
 
-        return LangfuseClient().load_dataset(cfg.langfuse_dataset)
-    raise ValueError("Config must set local_dataset or langfuse_dataset")
+        return get_store(cfg.trace_store).load_dataset(cfg.dataset)
+    raise ValueError("Config must set local_dataset or dataset")
 
 
 def resolve_task_fn(spec: str) -> Callable:
@@ -83,6 +83,10 @@ def build_evaluators(
     needs_judge = any(evaluator_requires_judge(s.name) for s in specs)
     if needs_judge and judge is None:
         judge = make_judge(cfg.judge)
+    for spec in specs:
+        if evaluator_requires_judge(spec.name):
+            # rubric resolution needs to know which store to fetch from
+            spec.params.setdefault("trace_store", cfg.trace_store)
     return [create_evaluator(spec, judge=judge) for spec in specs], judge
 
 
@@ -112,7 +116,7 @@ def score_trace(
             score.case_id = case.case_id if case else None
             score.repeat_index = repeat_index
             if trace.metadata.get("source_trace_id"):
-                # so Langfuse write-back attaches to the agent's real trace
+                # so store write-back attaches to the agent's real trace
                 score.metadata.setdefault("source_trace_id", trace.metadata["source_trace_id"])
             if cache:
                 cache.put(key, score)
@@ -172,7 +176,7 @@ def run_single_case(
     trace = result if isinstance(result, Trace) else Trace(**result)
     # Deterministic ID per (run, case, repeat): score-cache hits must survive
     # retries even when the agent mints a random trace ID (note 09 §1). The
-    # agent's own Langfuse trace ID is preserved for score write-back.
+    # agent's own platform trace ID is preserved for score write-back.
     source_trace_id = trace.trace_id
     trace.trace_id = f"{run_id}/{case.case_id}/r{repeat_index}"
     if source_trace_id:
@@ -248,7 +252,7 @@ def run_offline(
     out_dir: str | Path = "runs",
     judge: Optional[BaseJudge] = None,
     cache: Optional[ScoreCache] = None,
-    post_to_langfuse: bool = False,
+    post_scores: bool = False,
     mode: str = "experiment",  # experiment | replay
     traces_path: Optional[str | Path] = None,
     baselines_dir: Optional[str | Path] = None,
@@ -348,13 +352,13 @@ def run_offline(
 
     _write_artifacts(result, cfg, judge, run_dir, all_scores, mode)
 
-    if post_to_langfuse:
-        from agent_evals.core.langfuse_client import LangfuseClient
+    if post_scores:
+        from agent_evals.core.store import get_store
 
-        client = LangfuseClient()
+        store = get_store(cfg.trace_store)
         for score in all_scores:
-            client.post_score(score)
-        client.flush()
+            store.post_score(score)
+        store.flush()
 
     return result
 
@@ -378,7 +382,8 @@ def _write_artifacts(
         "agent": cfg.agent,
         "mode": mode,
         "k": result.k,
-        "dataset": cfg.langfuse_dataset or cfg.local_dataset,
+        "trace_store": cfg.trace_store,
+        "dataset": cfg.dataset or cfg.local_dataset,
         "judge_provider": judge.provider if judge else None,
         "judge_model": judge.model if judge else None,
         "rubric_versions": {

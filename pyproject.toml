@@ -11,6 +11,7 @@ dependencies = [
 
 [project.optional-dependencies]
 langfuse = ["langfuse>=2.50"]
+langsmith = ["langsmith>=0.1"]
 anthropic = ["anthropic>=0.40"]
 temporal = ["temporalio>=1.5"]
 dev = ["pytest>=8"]

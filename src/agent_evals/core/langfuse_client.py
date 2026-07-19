@@ -1,16 +1,21 @@
 """Thin Langfuse wrapper — the only module that talks to Langfuse.
 
-Lazy-imported so the harness runs fully local (JSONL datasets, no score
-posting) without the SDK or credentials. Credentials come from the
-standard env vars (LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY / LANGFUSE_HOST).
+Registered as trace store "langfuse" (the default). SDK import stays lazy
+so the harness runs fully local (JSONL datasets, no score posting) without
+the SDK or credentials. Credentials come from the standard env vars
+(LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY / LANGFUSE_HOST).
 """
 
 from __future__ import annotations
 
 from agent_evals.core.schemas import Case, Score
+from agent_evals.core.store import TraceStore, register_store
 
 
-class LangfuseClient:
+@register_store
+class LangfuseClient(TraceStore):
+    name = "langfuse"
+
     def __init__(self) -> None:
         try:
             from langfuse import Langfuse

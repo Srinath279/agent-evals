@@ -3,9 +3,10 @@
 # evaluators. Run the adapter conformance check first:
 #   from agent_evals.testing import assert_adapter_conformance
 agent: CHANGE-ME
-trace_adapter: langfuse-generic     # or your framework-specific adapter
+trace_store: langfuse               # langfuse | langsmith (datasets/scores/rubrics)
+trace_adapter: langfuse-generic     # langsmith-generic, or your framework-specific adapter
 task_fn: your_package.agent:invoke  # contract: task_fn(case_input) -> Trace
-langfuse_dataset: CHANGE-ME-golden-v1
+dataset: CHANGE-ME-golden-v1        # remote dataset name in the trace store
 # local_dataset: ../datasets/CHANGE-ME.jsonl   # local JSONL alternative
 
 trace_filter: {tags: ["CHANGE-ME"], environment: "prod"}

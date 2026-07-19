@@ -24,7 +24,8 @@ def main(argv: list[str] | None = None) -> int:
     run_parser.add_argument("--baselines", default=None,
                             help="baseline registry dir; enables regression gating (e.g. baselines/)")
     run_parser.add_argument(
-        "--post-scores", action="store_true", help="also post scores to Langfuse"
+        "--post-scores", action="store_true",
+        help="also post scores to the configured trace store"
     )
 
     promote_parser = sub.add_parser("promote-baseline",
@@ -35,7 +36,7 @@ def main(argv: list[str] | None = None) -> int:
 
     push_parser = sub.add_parser(
         "push-rubrics",
-        help="seed/update judge rubrics in Langfuse Prompt Management (version-continuous)",
+        help="seed/update judge rubrics in the trace store's prompt management (version-continuous)",
     )
     push_parser.add_argument("--config", required=True)
 
@@ -51,13 +52,14 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("list-evaluators", help="list registered evaluators")
 
     seed_parser = sub.add_parser(
-        "seed-dataset", help="upload a local JSONL golden set to a Langfuse dataset (PII-redacted)"
+        "seed-dataset",
+        help="upload a local JSONL golden set to the trace store (PII-redacted)"
     )
     seed_parser.add_argument("--config", required=True)
     seed_parser.add_argument("--from", dest="source", default=None,
                              help="JSONL of cases (default: the config's local_dataset)")
     seed_parser.add_argument("--name", default=None,
-                             help="dataset name (default: the config's langfuse_dataset)")
+                             help="dataset name (default: the config's dataset)")
 
     args = parser.parse_args(argv)
 
@@ -80,9 +82,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "push-rubrics":
         import agent_evals.evaluators  # noqa: F401
         from agent_evals.core.evaluator import get_evaluator_class
-        from agent_evals.core.langfuse_client import LangfuseClient
+        from agent_evals.core.store import get_store
 
-        client = LangfuseClient()
+        client = get_store(cfg.trace_store)
         pushed = 0
         for spec in cfg.evaluators:
             cls = get_evaluator_class(spec.name)
@@ -109,13 +111,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "seed-dataset":
         import json
 
-        from agent_evals.core.langfuse_client import LangfuseClient
         from agent_evals.core.redaction import redact
         from agent_evals.core.schemas import Case
+        from agent_evals.core.store import get_store
 
-        name = args.name or cfg.langfuse_dataset
+        name = args.name or cfg.dataset
         if not name:
-            print("error: no dataset name (--name or config langfuse_dataset)")
+            print("error: no dataset name (--name or config dataset)")
             return 2
         source = args.source or cfg.local_dataset
         if not source:
@@ -126,16 +128,16 @@ def main(argv: list[str] | None = None) -> int:
         for case in cases:  # redaction before anything leaves the machine (note 05 §2)
             case.input = redact(case.input)
             case.expected_output = redact(case.expected_output)
-        client = LangfuseClient()
+        client = get_store(cfg.trace_store)
         n = client.seed_dataset(name, cases)
         client.flush()
-        print(f"seeded {n} redacted cases into Langfuse dataset '{name}'")
+        print(f"seeded {n} redacted cases into {cfg.trace_store} dataset '{name}'")
         return 0
     result = run_offline(
         cfg,
         k=args.k,
         out_dir=args.out,
-        post_to_langfuse=args.post_scores,
+        post_scores=args.post_scores,
         mode=args.mode,
         traces_path=args.traces,
         baselines_dir=args.baselines,

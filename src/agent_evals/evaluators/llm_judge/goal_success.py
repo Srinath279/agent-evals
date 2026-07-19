@@ -60,7 +60,11 @@ class GoalSuccessEvaluator(BaseEvaluator):
             params.get("rubric_name", self.rubric_name),
             RUBRIC,
             RUBRIC_VERSION,
-            from_langfuse=params.get("rubric_from_langfuse", False),
+            # rubric_from_langfuse is the pre-multi-store param name
+            from_store=params.get(
+                "rubric_from_store", params.get("rubric_from_langfuse", False)
+            ),
+            store=params.get("trace_store", "langfuse"),
         )
 
     def evaluate(self, trace: Trace, case: Optional[Case] = None) -> Score:

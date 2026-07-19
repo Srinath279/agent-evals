@@ -25,21 +25,21 @@ def list_case_ids(config_path: str) -> list[str]:
 
 @activity.defn
 def score_online_trace(config_path: str, trace_id: str, cache_dir: str) -> dict:
-    """Online mode: fetch one sampled production trace from Langfuse, score
-    it with the cheap-tier evaluators, write scores back, and push
+    """Online mode: fetch one sampled production trace from the trace store,
+    score it with the cheap-tier evaluators, write scores back, and push
     below-threshold traces to the annotation queue (the flywheel intake)."""
     from agent_evals.core.adapters import get_adapter
-    from agent_evals.core.langfuse_client import LangfuseClient
+    from agent_evals.core.store import get_store
     from agent_evals.online import score_online
 
     cfg = load_config(config_path)
-    client = LangfuseClient()
+    client = get_store(cfg.trace_store)
     raw = client.fetch_trace_raw(trace_id)
     trace = get_adapter(cfg.trace_adapter).to_trace(raw)
 
     cache = ScoreCache(Path(cache_dir) / "online.sqlite3")
     try:
-        scores, failures = score_online(trace, cfg, cache=cache, post_to_langfuse=True)
+        scores, failures = score_online(trace, cfg, cache=cache, post_scores=True)
     finally:
         cache.close()
 

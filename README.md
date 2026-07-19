@@ -40,9 +40,11 @@ with all configured evaluators, enforces the score thresholds as a gate
 
 1. Copy `configs/support_agent.yaml`; point `task_fn` at your agent's invoke
    function (contract: `task_fn(case_input) -> Trace`).
-2. Golden set: a local JSONL of `Case` rows, or set `langfuse_dataset` and
-   install the `langfuse` extra (env: `LANGFUSE_PUBLIC_KEY/SECRET_KEY/HOST`).
-   `--post-scores` writes results back to Langfuse.
+2. Golden set: a local JSONL of `Case` rows, or set `dataset` and install the
+   extra for your `trace_store` — `langfuse` (env:
+   `LANGFUSE_PUBLIC_KEY/SECRET_KEY/HOST`, the default) or `langsmith`
+   (env: `LANGSMITH_API_KEY`; pair with `trace_adapter: langsmith-generic`).
+   `--post-scores` writes results back to the configured store.
 3. Real judge: set `judge.provider: anthropic` + a pinned model and install
    the `anthropic` extra (`ANTHROPIC_API_KEY`). Vertex/OpenAI land in Phase 2.
 4. New metrics: subclass `BaseEvaluator`, `@register` it, add a row to
@@ -54,7 +56,7 @@ with all configured evaluators, enforces the score thresholds as a gate
 src/agent_evals/
 ├── core/            schemas, config, evaluator base+registry, multi-provider
 │                    judge, score cache (idempotency layer), PII redaction,
-│                    trace adapters, Langfuse client
+│                    trace adapters, trace stores (Langfuse, LangSmith)
 ├── evaluators/      label_match (deterministic) · goal_success (LLM judge)
 │                    · tool_selection (trajectory)
 ├── runner.py        pass^k offline runner + gate + run artifacts
@@ -81,6 +83,22 @@ See `pipelines/worker.py` for the `temporal workflow start` command. Rules
 honored (note 08): orchestration only in `pipelines/`, IDs-not-payloads
 through workflow history, activities-only I/O, chunked fan-out, and the score
 cache makes at-least-once activity retries idempotent.
+
+## Switching platforms
+
+The observability platform is a config field, not a dependency:
+
+```yaml
+trace_store: langsmith          # was: langfuse (the default)
+trace_adapter: langsmith-generic
+dataset: my-golden-v1
+```
+
+Both stores implement the same `TraceStore` contract (`core/store.py`):
+datasets, score write-back, prompt/rubric management, trace fetching, and
+annotation queues. Adding platform N = one `TraceStore` subclass + one
+`TraceAdapter` for its raw trace shape. Legacy configs using
+`langfuse_dataset` / `rubric_from_langfuse` keep working.
 
 ## Design invariants
 

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Optional, Union
 
 import yaml
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class JudgeConfig(BaseModel):
@@ -30,9 +30,11 @@ class EvaluatorSpec(BaseModel):
 
 class AgentConfig(BaseModel):
     agent: str
+    trace_store: str = "langfuse"  # platform for datasets/scores/rubrics (core/store.py)
     trace_adapter: str = "langfuse-generic"
     task_fn: Optional[str] = None  # "package.module:function"
-    langfuse_dataset: Optional[str] = None
+    dataset: Optional[str] = None  # remote dataset name in the trace store
+    langfuse_dataset: Optional[str] = None  # deprecated alias for dataset
     local_dataset: Optional[str] = None  # JSONL of Cases; path relative to config file
     trace_filter: dict[str, Any] = Field(default_factory=dict)
     online_sample_rate: float = 0.0
@@ -67,6 +69,12 @@ class AgentConfig(BaseModel):
             else:
                 specs.append(item)
         return specs
+
+    @model_validator(mode="after")
+    def _alias_langfuse_dataset(self) -> "AgentConfig":
+        if self.dataset is None and self.langfuse_dataset is not None:
+            self.dataset = self.langfuse_dataset
+        return self
 
     def resolve_path(self, p: str) -> Path:
         path = Path(p)

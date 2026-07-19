@@ -5,8 +5,9 @@ schemas -> trace adapter -> PII redaction -> 3 evaluators
 (label_match, goal_success, tool_selection) -> pass^k offline runner.
 
 Design rules honored here:
-- Langfuse is the system of record (scores/datasets), but the harness
-  runs fully local without it.
+- A pluggable trace store (Langfuse by default; LangSmith supported) is
+  the system of record (scores/datasets), but the harness runs fully
+  local without one.
 - Evaluators/adapters/judge/redaction are pure library code; Temporal
   imports live only in agent_evals.pipelines.
 - The score cache is the idempotency layer for judge calls.
