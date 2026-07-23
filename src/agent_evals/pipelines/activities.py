@@ -67,10 +67,14 @@ def score_case(config_path: str, case_id: str, repeat_index: int, run_id: str, c
         )
     finally:
         cache.close()
+    # Return full serialized scores (not just name->value): the client rebuilds
+    # CaseRunResult and runs the SAME aggregate_run() as the local engine, so
+    # both engines gate, compare to baseline, and emit identical artifacts.
     return {
         "case_id": result.case_id,
         "repeat_index": result.repeat_index,
+        "trace_id": result.trace_id,
         "passed": result.passed,
         "failures": result.failures,
-        "scores": {s.name: s.value for s in result.scores},
+        "scores": [s.model_dump() for s in result.scores],
     }

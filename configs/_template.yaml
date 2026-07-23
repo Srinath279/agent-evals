@@ -15,6 +15,19 @@ outlier_latency_ms: 30000     # traces above this are ALWAYS scored online
 outlier_cost_usd: 0.50
 repeats: 3                    # k for pass^k
 
+# Execution engine (optional). Default is local: `evals run` executes
+# in-process — no cluster, no temporalio dependency (the CI path). Set
+# engine: temporal to dispatch the durable EvalRunWorkflow instead; that
+# needs the 'temporal' extra and a running worker (`evals worker --config`).
+# pipeline:
+#   engine: temporal            # local (default) | temporal
+#   temporal:
+#     address: localhost:7233
+#     namespace: default
+#     task_queue: agent-evals
+#     cache_dir: runs/temporal-cache
+#     max_concurrent_activities: 8
+
 judge:
   provider: anthropic         # anthropic | vertex | openai | mock
   model: claude-opus-4-8      # pinned; provider+model stamped on every score

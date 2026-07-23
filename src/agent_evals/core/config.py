@@ -28,6 +28,35 @@ class EvaluatorSpec(BaseModel):
     params: dict[str, Any] = Field(default_factory=dict)
 
 
+class TemporalConfig(BaseModel):
+    """Connection + fan-out settings for the durable engine. Only read when
+    pipeline.engine == 'temporal'; ignored (and temporalio never imported)
+    for the default local engine."""
+
+    address: str = "localhost:7233"
+    namespace: str = "default"
+    task_queue: str = "agent-evals"
+    cache_dir: str = "runs/temporal-cache"  # shared score cache across activities
+    max_concurrent_activities: int = 8      # worker thread-pool size (sync activities)
+
+
+class PipelineConfig(BaseModel):
+    """How `evals run` executes. `local` (default) runs the offline runner
+    in-process — no cluster, no temporalio dependency, the CI path. `temporal`
+    dispatches the durable EvalRunWorkflow and requires the 'temporal' extra
+    plus a running worker (note 08)."""
+
+    engine: str = "local"  # local | temporal
+    temporal: TemporalConfig = Field(default_factory=TemporalConfig)
+
+    @field_validator("engine")
+    @classmethod
+    def _known_engine(cls, v: str) -> str:
+        if v not in ("local", "temporal"):
+            raise ValueError(f"pipeline.engine must be 'local' or 'temporal', got {v!r}")
+        return v
+
+
 class AgentConfig(BaseModel):
     agent: str
     trace_store: str = "langfuse"  # platform for datasets/scores/rubrics (core/store.py)
@@ -40,6 +69,8 @@ class AgentConfig(BaseModel):
     online_sample_rate: float = 0.0
     repeats: int = 1  # k for pass^k
     judge: JudgeConfig = Field(default_factory=JudgeConfig)
+    # execution engine: local (in-process, default) or temporal (durable)
+    pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
     evaluators: list[EvaluatorSpec] = Field(default_factory=list)
     # cheap-tier subset for online scoring; empty = non-judge evaluators only
     online_evaluators: list[EvaluatorSpec] = Field(default_factory=list)

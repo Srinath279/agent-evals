@@ -289,6 +289,42 @@ def run_offline(
     else:
         raise ValueError(f"Unknown mode: {mode}")
 
+    return aggregate_run(
+        cfg,
+        case_results,
+        run_id=run_id,
+        run_dir=run_dir,
+        k=k,
+        n_cases=n_cases,
+        mode=mode,
+        judge_provider=judge.provider if judge else None,
+        judge_model=judge.model if judge else None,
+        baselines_dir=baselines_dir,
+        post_scores=post_scores,
+    )
+
+
+def aggregate_run(
+    cfg: AgentConfig,
+    case_results: list[CaseRunResult],
+    *,
+    run_id: str,
+    run_dir: str | Path,
+    k: int,
+    n_cases: int,
+    mode: str,
+    judge_provider: Optional[str] = None,
+    judge_model: Optional[str] = None,
+    baselines_dir: Optional[str | Path] = None,
+    post_scores: bool = False,
+) -> RunResult:
+    """Aggregate scored case results into a gated RunResult and write the run
+    artifacts. Shared by the local runner (run_offline) and the Temporal client
+    (pipelines/client.py) so both engines gate, compare to baseline, and emit
+    identical artifacts from the same code."""
+    run_dir = Path(run_dir)
+    run_dir.mkdir(parents=True, exist_ok=True)
+
     all_scores = [s for cr in case_results for s in cr.scores]
     metric_values: dict[str, list[float]] = {}
     for score in all_scores:
@@ -350,7 +386,7 @@ def run_offline(
         out_dir=str(run_dir),
     )
 
-    _write_artifacts(result, cfg, judge, run_dir, all_scores, mode)
+    _write_artifacts(result, cfg, judge_provider, judge_model, run_dir, all_scores, mode)
 
     if post_scores:
         from agent_evals.core.store import get_store
@@ -366,7 +402,8 @@ def run_offline(
 def _write_artifacts(
     result: RunResult,
     cfg: AgentConfig,
-    judge: Optional[BaseJudge],
+    judge_provider: Optional[str],
+    judge_model: Optional[str],
     run_dir: Path,
     all_scores: list[Score],
     mode: str,
@@ -384,8 +421,8 @@ def _write_artifacts(
         "k": result.k,
         "trace_store": cfg.trace_store,
         "dataset": cfg.dataset or cfg.local_dataset,
-        "judge_provider": judge.provider if judge else None,
-        "judge_model": judge.model if judge else None,
+        "judge_provider": judge_provider,
+        "judge_model": judge_model,
         "rubric_versions": {
             spec.name: rv
             for spec in cfg.evaluators

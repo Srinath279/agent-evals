@@ -74,17 +74,14 @@ class EvalRunWorkflow:
             for handle in handles:
                 results.append(await handle)
 
-        pass_rate = sum(r["passed"] for r in results) / len(results) if results else 0.0
-        by_case: dict[str, list[bool]] = {}
-        for r in results:
-            by_case.setdefault(r["case_id"], []).append(r["passed"])
-        pass_k = sum(all(v) for v in by_case.values()) / len(by_case) if by_case else 0.0
-
+        # Return the raw per-case results; the client runs aggregate_run() to
+        # gate, compare to baseline, and write artifacts — identical to the
+        # local engine (pipelines/client.py). Keeping aggregation client-side
+        # (not in a worker activity) means artifacts land where `evals run` was
+        # invoked, and baseline_dir is read from the caller's filesystem.
         return {
             "run_id": run_id,
             "n_cases": len(case_ids),
             "k": k,
-            "pass_rate": pass_rate,
-            "pass_k_rate": pass_k,
-            "failing": [r for r in results if not r["passed"]],
+            "case_results": results,
         }

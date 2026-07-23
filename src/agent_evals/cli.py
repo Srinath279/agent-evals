@@ -27,6 +27,10 @@ def main(argv: list[str] | None = None) -> int:
         "--post-scores", action="store_true",
         help="also post scores to the configured trace store"
     )
+    run_parser.add_argument(
+        "--engine", choices=["local", "temporal"], default=None,
+        help="override pipeline.engine from the config (local=in-process, temporal=durable)",
+    )
 
     promote_parser = sub.add_parser("promote-baseline",
                                     help="promote a completed run to be the agent's baseline")
@@ -60,6 +64,12 @@ def main(argv: list[str] | None = None) -> int:
                              help="JSONL of cases (default: the config's local_dataset)")
     seed_parser.add_argument("--name", default=None,
                              help="dataset name (default: the config's dataset)")
+
+    worker_parser = sub.add_parser(
+        "worker",
+        help="start a Temporal worker (requires pipeline.engine: temporal + the 'temporal' extra)",
+    )
+    worker_parser.add_argument("--config", required=True)
 
     args = parser.parse_args(argv)
 
@@ -133,6 +143,18 @@ def main(argv: list[str] | None = None) -> int:
         client.flush()
         print(f"seeded {n} redacted cases into {cfg.trace_store} dataset '{name}'")
         return 0
+
+    if args.command == "worker":
+        from agent_evals.pipelines.worker import run_worker
+
+        run_worker(args.config)  # blocks; refuses unless engine == temporal
+        return 0
+
+    # --- run: dispatch on the pipeline engine (config, or --engine override) ---
+    engine = args.engine or cfg.pipeline.engine
+    if engine == "temporal":
+        return _run_temporal(cfg, args)
+
     result = run_offline(
         cfg,
         k=args.k,
@@ -143,7 +165,13 @@ def main(argv: list[str] | None = None) -> int:
         baselines_dir=args.baselines,
     )
 
-    print(f"run:       {result.run_id} ({args.mode})")
+    return _print_run_result(result, cfg, args.mode)
+
+
+def _print_run_result(result, cfg, mode_label: str) -> int:
+    """Render a RunResult and return the process exit code (0 pass / 1 gate
+    fail). Shared by the local and temporal engines so both print identically."""
+    print(f"run:       {result.run_id} ({mode_label})")
     print(f"agent:     {result.agent}")
     print(f"cases:     {result.n_cases} x k={result.k}")
     for metric, cmp in result.baseline_comparison.items():
@@ -164,6 +192,25 @@ def main(argv: list[str] | None = None) -> int:
     for failure in result.gate_failures:
         print(f"  - {failure}")
     return 1
+
+
+def _run_temporal(cfg, args) -> int:
+    """Dispatch the eval to the Temporal cluster (pipeline.engine: temporal).
+    Blocks on the durable EvalRunWorkflow, then aggregates client-side with the
+    same code path as the local engine — so gating, --baselines regression
+    comparison, and the run artifacts (report.md, scores.jsonl, manifest.json)
+    are identical. The only difference is durability/retries of the scoring."""
+    from agent_evals.pipelines.client import submit_eval_run
+
+    if args.mode != "experiment":
+        print("error: --mode replay is only supported by the local engine")
+        return 2
+
+    result = submit_eval_run(
+        cfg, args.config, k=args.k,
+        out_dir=args.out, baselines_dir=args.baselines, post_scores=args.post_scores,
+    )
+    return _print_run_result(result, cfg, "temporal")
 
 
 def _calibrate(args) -> int:
